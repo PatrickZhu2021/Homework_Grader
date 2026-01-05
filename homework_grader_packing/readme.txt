@@ -11,3 +11,6 @@ OCR_URL = https://cbm01.cn-huabei-1.xf-yun.com/v1/private/se75ocrbm
 OCR_APP_ID = your app id
 OCR_API_KEY = your api key
 OCR_API_SECRET = your api secret
+
+3.打包方式
+pyinstaller --noconfirm --onedir --name HomeworkGrader --collect-all streamlit --collect-all PIL --hidden-import PIL.Image --hidden-import PIL.ImageEnhance --hidden-import dotenv --hidden-import dotenv.main --add-data "apps;apps" --add-data "core;core" launcher.py

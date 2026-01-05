@@ -48,33 +48,18 @@ def load_config_from_secrets_or_env() -> AppConfig:
       Sensitive fields should be provided via env/.env, not toml.
     """
     import os
-    import sys as _sys
     from pathlib import Path
 
     # 0) Optional: load .env if present (safe no-op if python-dotenv not installed)
-    # PATCH: packaged EXE's CWD may not be exe dir, so search explicitly.
     try:
         from dotenv import load_dotenv  # type: ignore
-
-        exe_dir = Path(_sys.executable).resolve().parent  # dist\HomeworkGrader
-        candidates = [
-            exe_dir / ".env",   # ✅ packaged app next to HomeworkGrader.exe
-            ROOT / ".env",      # ✅ dev: project root
-            Path.cwd() / ".env" # fallback
-        ]
-        dotenv_path = next((p for p in candidates if p.exists()), None)
-        if dotenv_path:
-            load_dotenv(dotenv_path=dotenv_path, override=True)
-            print(f"[config] loaded .env from: {dotenv_path}")
-        else:
-            print(f"[config] .env not found. tried: {[str(p) for p in candidates]}")
+        load_dotenv()  # loads .env from current working dir
     except Exception:
         pass
 
     # 1) load config.toml if exists
     def _load_toml() -> dict:
-        # PATCH: always read from project root, not cwd
-        cfg_path = ROOT / "config.toml"
+        cfg_path = Path("config.toml")
         if not cfg_path.exists():
             return {}
         txt = cfg_path.read_text(encoding="utf-8", errors="ignore")
@@ -92,9 +77,13 @@ def load_config_from_secrets_or_env() -> AppConfig:
     toml_cfg = _load_toml()
 
     def _get_secret(k: str) -> str | None:
-        if hasattr(st, "secrets") and k in st.secrets:
-            v = str(st.secrets[k])
-            return v if v != "" else None
+        try:
+            if hasattr(st, "secrets") and k in st.secrets:
+                v = str(st.secrets[k])
+                return v if v != "" else None
+        except Exception:
+            # 这里会捕获 StreamlitSecretNotFoundError 等情况
+            return None
         return None
 
     def _get_toml(k: str) -> str | None:
@@ -127,6 +116,7 @@ def load_config_from_secrets_or_env() -> AppConfig:
         ocr_api_secret=pick("OCR_API_SECRET", ""),          # recommend env/.env
     )
     return cfg
+
 
 
 def config_is_ok(cfg: AppConfig) -> bool:
@@ -215,7 +205,9 @@ def _start_batch_clicked():
     st.session_state["job_started"] = False
 
 
+
 def main():
+    # 把你原本顶层的 streamlit UI 代码（从 st.set_page_config 开始）全部缩进到这里
     # -------------------------
     # UI
     # -------------------------
@@ -224,6 +216,7 @@ def main():
 
     disabled = st.session_state["phase"] == "running"
 
+    # 顶部锁定提示（保留预览，不 st.stop）
     if st.session_state["phase"] == "running":
         st.warning("批改进行中：界面已锁定，请等待完成…")
     elif st.session_state["phase"] == "done":
@@ -296,8 +289,12 @@ def main():
         st.error("配置不完整：请检查 st.secrets 或环境变量中的 OCR_* / SPARK_*。")
         st.stop()
 
+
     col1, col2 = st.columns([1, 1], gap="large")
 
+    # -------------------------
+    # Left: upload + preview (预览永远保留，但控件会在 running 时禁用)
+    # -------------------------
     with col1:
         st.subheader("上传作业图片（多选）")
         uploaded_files = st.file_uploader(
@@ -311,11 +308,13 @@ def main():
         if not uploaded_files:
             st.session_state.pop("preview_file", None)
             st.info("请上传多张作业照片或扫描件，然后点击“开始批改（批量）”。")
+            # 注意：这里可以 stop，因为没法预览
             st.stop()
 
         names = [f.name for f in uploaded_files]
         file_map = {f.name: f for f in uploaded_files}
 
+        # uploader 叉删文件时，保证 preview 选项回退不崩
         old = st.session_state.get("preview_file")
         if old not in names:
             st.session_state["preview_file"] = names[0]
@@ -341,12 +340,18 @@ def main():
             on_click=_start_batch_clicked,
         )
 
+    # -------------------------
+    # Right: results + (run execution lives HERE so status shows on right)
+    # -------------------------
     with col2:
         st.subheader("结果")
+        # 运行时在右侧显示 status（你要的右上角）
         if st.session_state["phase"] == "running" and not st.session_state["job_started"]:
             st.session_state["job_started"] = True
+
             try:
                 images = [(f.name, f.getvalue()) for f in uploaded_files]
+
                 with st.status("批改中…（批量）", expanded=True) as status:
                     status.write("已锁定界面控件，正在处理图片…")
 
@@ -365,10 +370,12 @@ def main():
                         jpeg_quality=int(jpeg_quality),
                         save_wrongbook=bool(enable_wrongbook),
                     )
+
                     status.update(label="批改完成 ✅", state="complete", expanded=False)
 
                 st.session_state["batch_run"] = out
 
+                # 自动导出错题本（只做一次）
                 if enable_wrongbook and auto_export_wrongbook:
                     for s in out.get("students", []) or []:
                         student_dir = Path(s.get("student_dir", ""))
@@ -385,6 +392,7 @@ def main():
                 st.session_state["phase"] = "done"
                 st.rerun()
 
+        # 展示结果（done / idle）
         out = st.session_state.get("batch_run")
         if out is None:
             if st.session_state["phase"] == "running":
@@ -395,8 +403,7 @@ def main():
             run_dir = Path(out["run_dir"])
             st.success(f"批量完成：{run_dir}")
             st.caption("每个学生一个文件夹，包含 result.json / summary.md / wrongbook.jsonl（若启用）")
-            st.json(out)
-            
+
             students = out.get("students", []) or []
             errors = out.get("errors", []) or []
 
@@ -527,7 +534,6 @@ def main():
                     st.success(f"已为 {exported} 位学生导出错题本到各自 export/ 文件夹。")
 
     pass
-
 
 if __name__ == "__main__":
     main()
