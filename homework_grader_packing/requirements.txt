@@ -1,0 +1,6 @@
+streamlit>=1.36
+pillow>=10.0
+opencv-python-headless>=4.8
+requests>=2.31
+python-dotenv>=1.0
+toml>=0.10.2
